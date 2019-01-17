@@ -23,6 +23,8 @@ from airflow.hooks.S3_hook import S3Hook
 from airflow.models import BaseOperator
 from airflow.utils.decorators import apply_defaults
 from bson import json_util
+from gzip import GzipFile
+from io import BytesIO
 
 
 class MongoToS3Operator(BaseOperator):
@@ -50,6 +52,7 @@ class MongoToS3Operator(BaseOperator):
                  s3_key,
                  mongo_db=None,
                  replace=False,
+                 compress=True,
                  *args, **kwargs):
         super(MongoToS3Operator, self).__init__(*args, **kwargs)
         # Conn Ids
@@ -67,6 +70,9 @@ class MongoToS3Operator(BaseOperator):
         self.s3_bucket = s3_bucket
         self.s3_key = s3_key
         self.replace = replace
+
+        # Compression enable
+        self.compress = compress
 
     def execute(self, context):
         """
@@ -92,13 +98,28 @@ class MongoToS3Operator(BaseOperator):
         # Performs transform then stringifies the docs results into json format
         docs_str = self._stringify(self.transform(results))
 
-        # Load Into S3
-        s3_conn.load_string(
-            string_data=docs_str,
-            key=self.s3_key,
-            bucket_name=self.s3_bucket,
-            replace=self.replace
-        )
+        if self.compress:
+            # Load Into S3 Compressed
+            gz_body = BytesIO() # Create File Like Object/Streaming
+            gz = GzipFile(None, 'wb', 9, gz_body)
+            gz.write(docs_str.encode('utf-8'))  # convert unicode strings to bytes!
+            gz.close()
+
+            s3_conn.load_bytes(
+                bytes_data=gz_body.getvalue(),
+                replace=self.replace,
+                key=self.s3_key,
+                bucket_name=self.s3_bucket
+            )
+
+        else:
+            # Load Into S3
+            s3_conn.load_string(
+                string_data=docs_str,
+                key=self.s3_key,
+                bucket_name=self.s3_bucket,
+                replace=self.replace
+            )
 
         return True
 
